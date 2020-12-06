@@ -125,30 +125,40 @@ class UserControl(object):
         RELOAD = 4
         SELFKILL = 5
         APPLYATTACH = 6
+        CLICK = 7
+
 
 
     increment = 0
 
-    def __init__(self, parent):
+    def __init__(self, parent=None, name="UC", width=30, height=30):
         """Initialize
         
         :parent: str formlayout
         """
         # super(UserControl, self).__init__()
+        self.update = []
         self.parentUC = None
         self.parentLay = None
         self.layout = None
+        self.color = {"background" : "background"}
+        self.colorTheme = {"main": 0x404040,
+                           "secondary": 0x454545,
+                           "button": 0x606060,
+                           "highlight": 0x5285a6,
+                           "background":0x444444,
+                           "backgroundSecondary":0x494949,
+                           "font": 0xeeeeee
+                           }
         self.setParent(parent)
         self._childrens = []
         self._commands = {}
-        self.name = "UC"
-        self.color = Color()
-        self.bgc = 0xa00000
+        self._clicksEvents = []
+        self._clicksEventsLoaded = []
+        self.name = name
         self.visible = True
-        self.width = -1
-        self.height = -1
-        self.initWidth = 30
-        self.initHeight = 30
+        self.width = width
+        self.height = height
         self.loaded = False
         self.pins = Attach(self)
         self.layout = None
@@ -164,15 +174,8 @@ class UserControl(object):
             if self.parentLay is None:
                 if cmds.workspaceControl(name, exists=1):
                     cmds.deleteUI(name)
-                self.parentLay = cmds.workspaceControl(name, retain=False, iw=self.initWidth, ih=self.initHeight, floating=True)
-            if self.height == -1 or self.width == -1:
-                self.layout = cmds.formLayout(name , parent=self.parentLay, bgc=hexToRGB(self.color.background), vis=self.visible)
-            elif not self.height == -1 and self.width == -1:
-                self.layout = cmds.formLayout(name , parent=self.parentLay, bgc=hexToRGB(self.color.background), vis=self.visible, h=self.height)
-            elif self.height == -1 and not self.width == -1:
-                self.layout = cmds.formLayout(name , parent=self.parentLay, bgc=hexToRGB(self.color.background), vis=self.visible, w=self.width)
-            else:
-                self.layout = cmds.formLayout(name , parent=self.parentLay, bgc=hexToRGB(self.color.background), h=self.height, w=self.width, vis=self.visible)
+                self.parentLay = cmds.workspaceControl(name, retain=False, iw=self.width, ih=self.height, floating=True)
+            self.layout = cmds.formLayout(name + "Lay", parent=self.parentLay, bgc=hexToRGB(self.colorTheme[self.color["background"]]), h=self.height, w=self.width, vis=self.visible)
             self.loaded = True
             for c in self._childrens:
                 c.parentLay = self.layout
@@ -183,17 +186,18 @@ class UserControl(object):
                 cmds.formLayout(self.layout, e=True, parent=self.parentLay)
             else:
                 cmds.formLayout(self.layout, e=True, parent=self.parentLay, h=self.height, w=self.width)
-        
+        self._eventClickLoading()
         for c in self._childrens:
             c.load()
-        if self.parentUC is not None:
-            self.parentUC.applyAttach()
+        # if self.parentUC is not None:
+        #     self.parentUC.applyAttach()
         self.applyAttach()
         self.runEvent(self.Event.LOAD)
 
     def _refresh(self):
         if self.loaded:
             # log.debug.info("refresh " + self.__class__.__name__ + "...")
+            self.update = []
             object.__getattribute__(self, "refresh")()
             for c in self._childrens:
                 c.refresh()
@@ -252,6 +256,11 @@ class UserControl(object):
         else:
             return object.__getattribute__(self, name)
 
+    def __setattr__(self, name, value):
+        if name != "update":
+            self.update.append(name)
+        object.__setattr__(self, name, value)
+
     def visibility(self, vis):
         """Set the vibility of the UserControl
 
@@ -293,15 +302,14 @@ class UserControl(object):
             ac += ch.pins.controller
             an += ch.pins.none
         if not(af == [] and af == [] and af == [] and af == []):
-            cmds.formLayout(self.layout, edit=True,attachForm=af,attachPosition=ap,attachControl=ac,attachNone=an)
+            print(self.layout, af, ap,ac,an)
+            cmds.formLayout(self.layout, edit=True, attachForm=af,attachPosition=ap,attachControl=ac,attachNone=an)
         self.runEvent(self.Event.APPLYATTACH)
 
     def setParent(self, parent):
-
         if parent is None:
             self.parentLay = parent
             self.parentUC = parent
-            self.color = Color()
         elif type(parent) is str or type(parent) is unicode:
             self.parentLay = parent
         else:
@@ -311,12 +319,13 @@ class UserControl(object):
                 self.parentUC = parent
                 self.parentLay = parent.layout
                 self.parentUC.addChildren(self)
-                self.color = parent.color
+                self.colorTheme = parent.colorTheme
+                if parent.color["background"] == "background":
+                    self.color["background"] = "backgroundSecondary"
             except:
                 log.debug.error(str(parent) + " of type " + str(type(parent)) + " is unreadable")
         if self.layout is not None and self.parentLay is not None:
             cmds.formLayout(self.layout, edit=True, parent=self.parentLay)
-
 
     def addChildren(self, child):
         self._childrens.append(child)
@@ -324,16 +333,19 @@ class UserControl(object):
     def delChildren(self, child):
         self._childrens.remove(child)
 
-    def eventHandler(self, event, c, *args):
+
+    def eventHandler(self, event, function, *args):
         """Execute the given command when the UC call an [Event]
             event: type of Event
-            c : function you want to call (some event might send more argument than your function ask)
+            function : function you want to call (some event might send more argument than your function ask)
             *args: Other argument you want to give
         """
         if not event in self._commands:
             self._commands[event] = []
-        self._commands[event].append((c, args))
+        self._commands[event].append((function, args))
     def runEvent(self, event, *args):
+        """Manually run an event
+        """
         if not event in self._commands:
             return
         for c in self._commands[event]:
@@ -343,6 +355,41 @@ class UserControl(object):
                 continue
             a = c[1] + args
             c[0](*a)
+    def eventClickHandler(self, buttonMouse, function, *args, **kwargs):
+        """Execute the given command when the UC call an [Event]
+            buttonMouse: (1)Left click (2)Midlle click (3)Right click
+            function : function you want to call (some event might send more argument than your function ask)
+            ctrl, alt, shift: modifier you want to apply
+            *args: Other argument you want to give
+            /!\ Must be loaded
+        """
+        kwargs["ctrl"] = kwargs.get("ctrl", False)
+        kwargs["alt"] = kwargs.get("alt", False)
+        kwargs["shift"] = kwargs.get("shift", False)
+        name = "Left" * (buttonMouse == 1) + "Middle" * (buttonMouse == 2) + "Right" * (buttonMouse == 3)
+        name += "ctrl" * kwargs["ctrl"] + "alt" * kwargs["alt"] + "shift" * kwargs["shift"]
+        self.eventHandler(name, function, *args)
+        self._clicksEvents.append([buttonMouse, kwargs["ctrl"], kwargs["alt"], kwargs["shift"]]) 
+        # if self.loaded:
+        #     self.reload()
+    def _eventClickLoading(self):
+        """
+        """
+        for i in range(0, len(self._clicksEvents)):
+            ce = self._clicksEvents[0]
+            name = "Left" * (ce[0] == 1) + "Middle" * (ce[0] == 2) + "Right" * (ce[0] == 3)
+
+            name += "ctrl" * ce[1] + "alt" * ce[2] + "shift" * ce[3]
+            cmds.popupMenu("EvClk" + name + self.layout, parent=self.layout, button=ce[0],
+                                                      ctl=ce[1], alt=ce[2], sh=ce[3],
+                                                      pmc=Callback(self.runClickEvent, ce[0], ce[1], ce[2], ce[3]))
+            self._clicksEventsLoaded.append(self._clicksEvents.pop(0))
+    def runClickEvent(self, buttonMouse, ctrl, alt, shift):
+        """Manually run a click mouse event
+        """
+        name = "Left" * (buttonMouse == 1) + "Middle" * (buttonMouse == 2) + "Right" * (buttonMouse == 3)
+        name += "ctrl" * ctrl + "alt" * alt + "shift" * shift
+        self.runEvent(name, buttonMouse, ctrl, alt, shift)
 
     def __str__(self):
         return str(self.layout)
